@@ -12,20 +12,18 @@ import javafx.scene.text.Text;
 import javafx.stage.Stage;
 import server.ConnectionUtil;
 
-import java.io.DataInputStream;
 import java.io.DataOutputStream;
 import java.io.IOException;
 import java.net.Socket;
-import java.util.concurrent.TimeUnit;
 
 public class JFXClient extends Application {
 
-    private DataOutputStream output;
-    private DataInputStream input;
-    private Socket socket;
-    private ClientReadThread runnable;
+    private DataOutputStream output = null;
+    private Socket socket = null;
     private static String name = null;
     public static String host = null;
+
+    private Text statusText = new Text();
 
 
     @Override
@@ -39,9 +37,9 @@ public class JFXClient extends Application {
         button.setStyle("-fx-base: green;");
         button.setDisable(true);
         button.setOnAction(new ButtonListener());
-        Text text = new Text("Connecting .....");
 
-        root.getChildren().addAll(button, text);
+
+        root.getChildren().addAll(button, this.statusText);
 
         primaryStage.setTitle(name);
         double WINDOW_WIDTH = 300.0;
@@ -52,26 +50,53 @@ public class JFXClient extends Application {
         primaryStage.sizeToScene();
         primaryStage.show();
 
-        this.runnable = new ClientReadThread(text, button);
-        Thread thread = new Thread(runnable);
-        thread.start();
+        // try to create socket and send "I'm alive" message to server
+        try {
+            this.socket = new Socket(host, ConnectionUtil.port);
+            this.output = new DataOutputStream(socket.getOutputStream());
+            this.statusText.setText("Connected");
+            button.setDisable(false);
+            this.sendMessage(name + ":" + ConnectionUtil.CLIENT_ALIVE);
+        } catch (IOException ex) {
+            // if can't set the connection
+            this.closeSocket();
+            button.setDisable(true);
+        }
     }
 
-    @Override
-    public void stop() {
-        try {
-            this.runnable.running = false;
-            if (output != null) {
-                output.writeUTF(name + ":" + ConnectionUtil.CLIENT_EXIT);
-                output.flush();
-                output.close();
+    private void sendMessage(String msg) {
+        if (this.output != null) {
+            try {
+                this.output.writeUTF(msg);
+                this.output.flush();
+            } catch (IOException e) {
+                this.closeSocket();
             }
-            if (input != null) input.close();
-            if (socket != null) socket.close();
+        }
+    }
 
+    private void closeSocket() {
+        this.statusText.setText("Server not found");
+        try {
+            if (this.output != null) {
+                this.output.close();
+                this.output = null;
+            }
+            if (this.socket != null) {
+                this.socket.close();
+                this.output = null;
+            }
         } catch (IOException e) {
             e.printStackTrace();
         }
+    }
+
+    @Override
+    public void stop() throws Exception {
+        this.sendMessage(name + ":" + ConnectionUtil.CLIENT_EXIT);
+        this.closeSocket();
+        super.stop();
+        System.out.println("bye");
     }
 
     public static void main(String[] args) {
@@ -88,110 +113,12 @@ public class JFXClient extends Application {
             if (button.isSelected()) {
                 button.setText("Stop");
                 button.setStyle("-fx-base: red;");
-                try {
-                    output.writeUTF(name + ":" + ConnectionUtil.CLIENT_START);
-                    output.flush();
-                } catch (IOException e) {
-                    e.printStackTrace();
-                }
+                sendMessage(name + ":" + ConnectionUtil.CLIENT_START);
             } else {
                 button.setText("Start");
                 button.setStyle("-fx-base: green;");
-                try {
-                    output.writeUTF(name + ":" + ConnectionUtil.CLIENT_STOP);
-                    output.flush();
-                } catch (IOException e) {
-                    e.printStackTrace();
-                }
+                sendMessage(name + ":" + ConnectionUtil.CLIENT_STOP);
             }
-        }
-    }
-
-    private class ClientReadThread implements Runnable {
-        private Text text;
-        private ToggleButton button;
-        private volatile boolean running = true;
-
-        public void terminateByServer() {
-            this.running = false;
-            this.text.setText("Server not found");
-            this.button.setDisable(true);
-            try {
-                if (input != null) {
-                    input.close();
-                    input = null;
-                }
-                if (output != null) {
-                    output.close();
-                    output = null;
-                }
-                if (socket != null) {
-                    socket.close();
-                    output = null;
-                }
-            } catch (IOException e) {
-                e.printStackTrace();
-            }
-        }
-
-        @Override
-        public void run() {
-            boolean connected = false;
-            int i = 1;
-            while (!connected && i < 10 && this.running) {
-                try {
-                    this.text.setText("Connecting ..... " + i);
-                    socket = new Socket(host, ConnectionUtil.port);
-                    this.text.setText("Connected");
-                    this.button.setDisable(false);
-                    output = new DataOutputStream(socket.getOutputStream());
-                    input = new DataInputStream(socket.getInputStream());
-
-                    output.writeUTF(name + ":" + ConnectionUtil.CLIENT_ALIVE);
-                    output.flush();
-
-                    connected = true;
-                } catch (IOException ex) {
-                    i++;
-                    try {
-                        TimeUnit.SECONDS.sleep(1);
-                    } catch (InterruptedException e) {
-                        e.printStackTrace();
-                    }
-                    ex.printStackTrace();
-                }
-            }
-            if (connected) {
-                while (this.running) {
-                    try {
-                        String message = null;
-                        try {
-                            message = input.readUTF();
-                        } catch (IOException e) {
-                            System.out.println("bye");
-                        }
-                        if (message != null) {
-                            switch (message) {
-                                case ConnectionUtil.SERVER_PING:
-                                    output.writeUTF(name + ":" + ConnectionUtil.CLIENT_ALIVE);
-                                    output.flush();
-                                    break;
-                                case ConnectionUtil.SERVER_STOP:
-                                    this.terminateByServer();
-                            }
-                        }
-                    } catch (IOException e) {
-                        e.printStackTrace();
-                    }
-                }
-            } else {
-                this.text.setText("Server not found");
-            }
-        }
-
-        public ClientReadThread(Text text, ToggleButton button) {
-            this.text = text;
-            this.button = button;
         }
     }
 }
